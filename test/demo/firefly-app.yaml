@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: firefly-app
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: firefly-app
+  template:
+    metadata:
+      labels:
+        app: firefly-app
+    spec:
+      # A taints was added to an automatically created Node.
+      # You can remove taints of Node or add this tolerations.
+      containers:
+      - name: fake-container
+        image: fake-image
