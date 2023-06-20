@@ -1,0 +1,107 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.8.0
+  creationTimestamp: null
+  name: clusters.cluster.firelfy.io
+spec:
+  group: cluster.firelfy.io
+  names:
+    kind: Cluster
+    listKind: ClusterList
+    plural: clusters
+    singular: cluster
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Cluster is a worker cluster in Firefly. Each cluster will have
+          a unique identifier in the cache (i.e. in etcd).
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the behavior of a cluster. https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+            properties:
+              connection:
+                description: Connection is the connection information for the cluster.
+                properties:
+                  kubeconfig:
+                    description: KubeConfig is the kubeconfig for the cluster.
+                    format: byte
+                    type: string
+                type: object
+            type: object
+          status:
+            description: 'Most recently observed status of the cluster. Populated
+              by the system. Read-only. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status'
+            properties:
+              clusterInfo:
+                description: Set of ids/uuids to uniquely identify the cluster.
+                properties:
+                  clusterID:
+                    description: ClusterID reported by the cluster. For unique cluster
+                      identification in Firefly this field is preferred.
+                    type: string
+                  serverVersion:
+                    description: Server Version is the Kubernetes version which is
+                      reported by the cluster from the API endpoint '/version' (e.g.
+                      1.27).
+                    type: string
+                type: object
+              conditions:
+                description: Conditions is an array of current observed cluster conditions.
+                items:
+                  description: ClusterCondition contains condition information for
+                    a cluster.
+                  properties:
+                    lastHeartbeatTime:
+                      description: Last time we got an update on a given condition.
+                      format: date-time
+                      type: string
+                    lastTransitionTime:
+                      description: Last time the condition transit from one status
+                        to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Human readable message indicating details about
+                        last transition.
+                      type: string
+                    reason:
+                      description: (brief) reason for the condition's last transition.
+                      type: string
+                    status:
+                      description: Status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: Type of cluster condition.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []
