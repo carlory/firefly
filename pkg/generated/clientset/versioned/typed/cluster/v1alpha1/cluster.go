@@ -33,7 +33,7 @@ import (
 // ClustersGetter has a method to return a ClusterInterface.
 // A group's client should implement this interface.
 type ClustersGetter interface {
-	Clusters(namespace string) ClusterInterface
+	Clusters() ClusterInterface
 }
 
 // ClusterInterface has methods to work with Cluster resources.
@@ -53,14 +53,12 @@ type ClusterInterface interface {
 // clusters implements ClusterInterface
 type clusters struct {
 	client rest.Interface
-	ns     string
 }
 
 // newClusters returns a Clusters
-func newClusters(c *ClusterV1alpha1Client, namespace string) *clusters {
+func newClusters(c *ClusterV1alpha1Client) *clusters {
 	return &clusters{
 		client: c.RESTClient(),
-		ns:     namespace,
 	}
 }
 
@@ -68,7 +66,6 @@ func newClusters(c *ClusterV1alpha1Client, namespace string) *clusters {
 func (c *clusters) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.Cluster, err error) {
 	result = &v1alpha1.Cluster{}
 	err = c.client.Get().
-		Namespace(c.ns).
 		Resource("clusters").
 		Name(name).
 		VersionedParams(&options, scheme.ParameterCodec).
@@ -85,7 +82,6 @@ func (c *clusters) List(ctx context.Context, opts v1.ListOptions) (result *v1alp
 	}
 	result = &v1alpha1.ClusterList{}
 	err = c.client.Get().
-		Namespace(c.ns).
 		Resource("clusters").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
@@ -102,7 +98,6 @@ func (c *clusters) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interf
 	}
 	opts.Watch = true
 	return c.client.Get().
-		Namespace(c.ns).
 		Resource("clusters").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
@@ -113,7 +108,6 @@ func (c *clusters) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interf
 func (c *clusters) Create(ctx context.Context, cluster *v1alpha1.Cluster, opts v1.CreateOptions) (result *v1alpha1.Cluster, err error) {
 	result = &v1alpha1.Cluster{}
 	err = c.client.Post().
-		Namespace(c.ns).
 		Resource("clusters").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(cluster).
@@ -126,7 +120,6 @@ func (c *clusters) Create(ctx context.Context, cluster *v1alpha1.Cluster, opts v
 func (c *clusters) Update(ctx context.Context, cluster *v1alpha1.Cluster, opts v1.UpdateOptions) (result *v1alpha1.Cluster, err error) {
 	result = &v1alpha1.Cluster{}
 	err = c.client.Put().
-		Namespace(c.ns).
 		Resource("clusters").
 		Name(cluster.Name).
 		VersionedParams(&opts, scheme.ParameterCodec).
@@ -141,7 +134,6 @@ func (c *clusters) Update(ctx context.Context, cluster *v1alpha1.Cluster, opts v
 func (c *clusters) UpdateStatus(ctx context.Context, cluster *v1alpha1.Cluster, opts v1.UpdateOptions) (result *v1alpha1.Cluster, err error) {
 	result = &v1alpha1.Cluster{}
 	err = c.client.Put().
-		Namespace(c.ns).
 		Resource("clusters").
 		Name(cluster.Name).
 		SubResource("status").
@@ -155,7 +147,6 @@ func (c *clusters) UpdateStatus(ctx context.Context, cluster *v1alpha1.Cluster, 
 // Delete takes name of the cluster and deletes it. Returns an error if one occurs.
 func (c *clusters) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	return c.client.Delete().
-		Namespace(c.ns).
 		Resource("clusters").
 		Name(name).
 		Body(&opts).
@@ -170,7 +161,6 @@ func (c *clusters) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, 
 		timeout = time.Duration(*listOpts.TimeoutSeconds) * time.Second
 	}
 	return c.client.Delete().
-		Namespace(c.ns).
 		Resource("clusters").
 		VersionedParams(&listOpts, scheme.ParameterCodec).
 		Timeout(timeout).
@@ -183,7 +173,6 @@ func (c *clusters) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, 
 func (c *clusters) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.Cluster, err error) {
 	result = &v1alpha1.Cluster{}
 	err = c.client.Patch(pt).
-		Namespace(c.ns).
 		Resource("clusters").
 		Name(name).
 		SubResource(subresources...).

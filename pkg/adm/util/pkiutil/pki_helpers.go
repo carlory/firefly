@@ -432,6 +432,8 @@ func GetAPIServerAltNames(client kubernetes.Interface, cfg *kubeadmapi.InitConfi
 			fmt.Sprintf("kubernetes.default.svc.%s", cfg.Networking.DNSDomain),
 		},
 		IPs: []net.IP{
+			netutils.ParseIPSloppy("127.0.0.1"),
+			netutils.ParseIPSloppy("0.0.0.0"),
 			internalAPIServerVirtualIP,
 		},
 	}

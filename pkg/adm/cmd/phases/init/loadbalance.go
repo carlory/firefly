@@ -86,7 +86,8 @@ func runLoadBalance(c workflow.RunData) error {
 			},
 			Ports: []v1.ServicePort{
 				{
-					Port: 6443,
+					Port:     6443,
+					NodePort: 31000,
 				},
 			},
 		},

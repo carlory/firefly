@@ -22,6 +22,8 @@ import (
 )
 
 // +genclient
+// +genclient:nonNamespaced
+// +kubebuilder:resource:scope="Cluster",categories={firefly-io}
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Cluster is a worker cluster in Firefly.

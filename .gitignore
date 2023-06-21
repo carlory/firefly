@@ -20,3 +20,4 @@ _output
 
 # Go workspace file
 go.work
+.vscode

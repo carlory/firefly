@@ -31,13 +31,13 @@ type ClusterV1alpha1Interface interface {
 	ClustersGetter
 }
 
-// ClusterV1alpha1Client is used to interact with features provided by the cluster.firelfy.io group.
+// ClusterV1alpha1Client is used to interact with features provided by the cluster.firefly.io group.
 type ClusterV1alpha1Client struct {
 	restClient rest.Interface
 }
 
-func (c *ClusterV1alpha1Client) Clusters(namespace string) ClusterInterface {
-	return newClusters(c, namespace)
+func (c *ClusterV1alpha1Client) Clusters() ClusterInterface {
+	return newClusters(c)
 }
 
 // NewForConfig creates a new ClusterV1alpha1Client for the given config.
