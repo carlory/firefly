@@ -23,7 +23,11 @@ import (
 
 // +genclient
 // +genclient:nonNamespaced
+// +kubebuilder:subresource:status
 // +kubebuilder:resource:scope="Cluster",categories={firefly-io}
+// +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Cluster is ready"
+// +kubebuilder:printcolumn:name="VERSION",type=string,JSONPath=`.status.clusterInfo.serverVersion`,description="Server Version is the Kubernetes version which is reported by the cluster from the API endpoint '/version'"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Cluster is a worker cluster in Firefly.
@@ -75,7 +79,7 @@ type ClusterStatus struct {
 type ClusterConditionType string
 
 const (
-	//ClusterReady means cluster is healthy and at least one worker node is ready to accept pods.
+	//ClusterReady means cluster is healthy and ready to accept pods.
 	ClusterReadyClusterConditionType = "Ready"
 	//ClusterMemoryPressure means the cluster is under pressure due to insufficient available memory.
 	ClusterMemoryPressureClusterConditionType = "MemoryPressure"

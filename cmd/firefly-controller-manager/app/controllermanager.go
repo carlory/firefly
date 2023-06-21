@@ -345,6 +345,7 @@ var ControllersDisabledByDefault = sets.NewString()
 func NewControllerInitializers() map[string]InitFunc {
 	controllers := map[string]InitFunc{}
 	controllers["cluster"] = startClusterController
+	// controllers["node"] = startNodeController
 	return controllers
 }
 

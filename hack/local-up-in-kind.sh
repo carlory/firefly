@@ -29,7 +29,7 @@ docker exec -it firefly-control-plane kubectl apply -f /root/.firefly/crds --kub
 
 echo
 echo "Installing kwok"
-docker cp BIN="${SCRIPT_ROOT}/test" firefly-control-plane:/root/.firefly/test/
+docker cp "${SCRIPT_ROOT}/test" firefly-control-plane:/root/.firefly/test/
 docker exec -it firefly-control-plane kubectl apply -f /root/.firefly/test/kwok
 docker exec -it firefly-control-plane kubectl apply -f /root/.firefly/test/demo --kubeconfig /root/.firefly/control-plane/admin.conf
 

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cluster
+package node
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -51,19 +50,19 @@ const (
 	maxRetries = 15
 
 	// name of the cluster controller finalizer
-	ClusterControllerFinalizerName = "cluster.firefly.io/finalizer"
+	NodeControllerFinalizerName = "cluster-node.firefly.io/finalizer"
 )
 
-// NewClusterController returns a new *Controller.
-func NewClusterController(
+// NewNodeController returns a new *Controller.
+func NewNodeController(
 	client kubernetes.Interface,
 	fireflyClient fireflyclient.Interface,
 	clusterInformer clusterinformers.ClusterInformer,
-	resyncPeriod time.Duration) (*ClusterController, error) {
+	resyncPeriod time.Duration) (*NodeController, error) {
 	broadcaster := record.NewBroadcaster()
-	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "cluster-controller"})
+	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "node-controller"})
 
-	ctrl := &ClusterController{
+	ctrl := &NodeController{
 		client:           client,
 		fireflyClient:    fireflyClient,
 		clustersLister:   clusterInformer.Lister(),
@@ -73,7 +72,6 @@ func NewClusterController(
 		eventBroadcaster: broadcaster,
 		eventRecorder:    recorder,
 	}
-	ctrl.setClusterStatusFuncs = ctrl.defaultClusterStatusFuncs()
 
 	clusterInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
 		AddFunc:    ctrl.addCluster,
@@ -84,7 +82,7 @@ func NewClusterController(
 	return ctrl, nil
 }
 
-type ClusterController struct {
+type NodeController struct {
 	client           kubernetes.Interface
 	fireflyClient    fireflyclient.Interface
 	eventBroadcaster record.EventBroadcaster
@@ -102,14 +100,11 @@ type ClusterController struct {
 
 	// workerLoopPeriod is the time between worker runs. The workers process the queue of service and pod changes.
 	workerLoopPeriod time.Duration
-
-	// handlers called during the syncClusterStatus cycle
-	setClusterStatusFuncs []func(context.Context, *clusterv1alpha1.Cluster) error
 }
 
 // Run will not return until stopCh is closed. workers determines how many
 // cluster will be handled in parallel.
-func (ctrl *ClusterController) Run(ctx context.Context, workers int) {
+func (ctrl *NodeController) Run(ctx context.Context, workers int) {
 	defer utilruntime.HandleCrash()
 
 	// Start events processing pipelinctrl.
@@ -136,12 +131,12 @@ func (ctrl *ClusterController) Run(ctx context.Context, workers int) {
 // marks them done. You may run as many of these in parallel as you wish; the
 // workqueue guarantees that they will not end up processing the same service
 // at the same time.
-func (ctrl *ClusterController) worker(ctx context.Context) {
+func (ctrl *NodeController) worker(ctx context.Context) {
 	for ctrl.processNextWorkItem(ctx) {
 	}
 }
 
-func (ctrl *ClusterController) processNextWorkItem(ctx context.Context) bool {
+func (ctrl *NodeController) processNextWorkItem(ctx context.Context) bool {
 	key, quit := ctrl.queue.Get()
 	if quit {
 		return false
@@ -154,20 +149,20 @@ func (ctrl *ClusterController) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
-func (ctrl *ClusterController) addCluster(obj interface{}) {
+func (ctrl *NodeController) addCluster(obj interface{}) {
 	cluster := obj.(*clusterv1alpha1.Cluster)
 	klog.V(4).InfoS("Adding cluster", "cluster", klog.KObj(cluster))
 	ctrl.enqueue(cluster)
 }
 
-func (ctrl *ClusterController) updateCluster(old, cur interface{}) {
+func (ctrl *NodeController) updateCluster(old, cur interface{}) {
 	oldCluster := old.(*clusterv1alpha1.Cluster)
 	curCluster := cur.(*clusterv1alpha1.Cluster)
 	klog.V(4).InfoS("Updating cluster", "cluster", klog.KObj(oldCluster))
 	ctrl.enqueue(curCluster)
 }
 
-func (ctrl *ClusterController) deleteCluster(obj interface{}) {
+func (ctrl *NodeController) deleteCluster(obj interface{}) {
 	cluster, ok := obj.(*clusterv1alpha1.Cluster)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
@@ -185,7 +180,7 @@ func (ctrl *ClusterController) deleteCluster(obj interface{}) {
 	ctrl.enqueue(cluster)
 }
 
-func (ctrl *ClusterController) enqueue(cluster *clusterv1alpha1.Cluster) {
+func (ctrl *NodeController) enqueue(cluster *clusterv1alpha1.Cluster) {
 	key, err := cache.MetaNamespaceKeyFunc(cluster)
 	if err != nil {
 		utilruntime.HandleError(err)
@@ -194,7 +189,7 @@ func (ctrl *ClusterController) enqueue(cluster *clusterv1alpha1.Cluster) {
 	ctrl.queue.Add(key)
 }
 
-func (ctrl *ClusterController) handleErr(err error, key interface{}) {
+func (ctrl *NodeController) handleErr(err error, key interface{}) {
 	if err == nil {
 		ctrl.queue.Forget(key)
 		return
@@ -215,7 +210,7 @@ func (ctrl *ClusterController) handleErr(err error, key interface{}) {
 	ctrl.queue.Forget(key)
 }
 
-func (ctrl *ClusterController) sync(ctx context.Context, key string) error {
+func (ctrl *NodeController) sync(ctx context.Context, key string) error {
 	_, clusterName, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		klog.ErrorS(err, "Failed to split meta cache key", "cacheKey", key)
@@ -246,8 +241,8 @@ func (ctrl *ClusterController) sync(ctx context.Context, key string) error {
 		// The object is not being deleted, so if it does not have our finalizer,
 		// then lets add the finalizer and update the object. This is equivalent
 		// registering our finalizer.
-		if !controllerutil.ContainsFinalizer(cluster, ClusterControllerFinalizerName) {
-			controllerutil.AddFinalizer(cluster, ClusterControllerFinalizerName)
+		if !controllerutil.ContainsFinalizer(cluster, NodeControllerFinalizerName) {
+			controllerutil.AddFinalizer(cluster, NodeControllerFinalizerName)
 			cluster, err = ctrl.fireflyClient.ClusterV1alpha1().Clusters().Update(ctx, cluster, metav1.UpdateOptions{})
 			if err != nil {
 				return err
@@ -255,7 +250,7 @@ func (ctrl *ClusterController) sync(ctx context.Context, key string) error {
 		}
 	} else {
 		// The object is being deleted
-		if controllerutil.ContainsFinalizer(cluster, ClusterControllerFinalizerName) {
+		if controllerutil.ContainsFinalizer(cluster, NodeControllerFinalizerName) {
 			// our finalizer is present, so lets handle any external dependency
 			if err := ctrl.deleteUnableGCResources(cluster); err != nil {
 				// if fail to delete the external dependency here, return with error
@@ -264,7 +259,7 @@ func (ctrl *ClusterController) sync(ctx context.Context, key string) error {
 			}
 
 			// remove our finalizer from the list and update it.
-			controllerutil.RemoveFinalizer(cluster, ClusterControllerFinalizerName)
+			controllerutil.RemoveFinalizer(cluster, NodeControllerFinalizerName)
 			_, err := ctrl.fireflyClient.ClusterV1alpha1().Clusters().Update(ctx, cluster, metav1.UpdateOptions{})
 			if err != nil {
 				return err
@@ -276,41 +271,10 @@ func (ctrl *ClusterController) sync(ctx context.Context, key string) error {
 
 	klog.InfoS("Syncing cluster", "cluster", klog.KObj(cluster))
 
-	return ctrl.syncClusterStatus(ctx, cluster)
-}
-
-// syncClusterStatus syncs the status of the given cluster.
-func (ctrl *ClusterController) syncClusterStatus(ctx context.Context, cluster *clusterv1alpha1.Cluster) error {
-	// Set the cluster's status fields.
-	ctrl.setClusterStatus(ctx, cluster)
-	_, err := ctrl.fireflyClient.ClusterV1alpha1().Clusters().UpdateStatus(ctx, cluster, metav1.UpdateOptions{})
-	return err
-}
-
-// setClusterStatus fills in the Status fields of the given cluster, overwriting
-// any fields that are currently set.
-func (ctrl *ClusterController) setClusterStatus(ctx context.Context, cluster *clusterv1alpha1.Cluster) {
-	for i, f := range ctrl.setClusterStatusFuncs {
-		klog.V(5).InfoS("Setting node status condition code", "position", i, "cluster", klog.KObj(cluster))
-		if err := f(ctx, cluster); err != nil {
-			klog.ErrorS(err, "Failed to set some cluster status fields", "cluster", klog.KObj(cluster))
-		}
-	}
-}
-
-// doEndpointCheck checks the health of the cluster's apiserver.
-func (ctrl *ClusterController) doEndpointCheck(client rest.Interface, path string) (int, error) {
-	var healthStatus int
-	resp := client.Get().AbsPath(path).Do(context.TODO()).StatusCode(&healthStatus)
-	return healthStatus, resp.Error()
-}
-
-func (ctrl *ClusterController) recordEvent(cluster *clusterv1alpha1.Cluster, eventType, event string) {
-	klog.V(2).InfoS("Recording event message for cluster", "cluster", klog.KObj(cluster), "event", event)
-	ctrl.eventRecorder.Eventf(cluster, eventType, event, "Cluster %s status is now: %s", cluster.Name, event)
+	return nil
 }
 
 // deleteUnableGCResources deletes the resources that are unable to garbage collect.
-func (ctrl *ClusterController) deleteUnableGCResources(cluster *clusterv1alpha1.Cluster) error {
+func (ctrl *NodeController) deleteUnableGCResources(cluster *clusterv1alpha1.Cluster) error {
 	return nil
 }

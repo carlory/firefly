@@ -19,10 +19,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/controller-manager/controller"
 
 	"github.com/carlory/firefly/pkg/controller/cluster"
+	"github.com/carlory/firefly/pkg/controller/cluster/node"
 )
 
 func startClusterController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
@@ -30,9 +32,24 @@ func startClusterController(ctx context.Context, controllerContext ControllerCon
 		controllerContext.ClientBuilder.ClientOrDie("cluster-controller"),
 		controllerContext.ClientBuilder.FireflyClientOrDie("cluster-controller"),
 		controllerContext.FireflyInformerFactory.Cluster().V1alpha1().Clusters(),
+		30*time.Second,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("error creating cluster controller: %v", err)
+	}
+	go ctrl.Run(ctx, 1)
+	return nil, true, nil
+}
+
+func startNodeController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
+	ctrl, err := node.NewNodeController(
+		controllerContext.ClientBuilder.ClientOrDie("node-controller"),
+		controllerContext.ClientBuilder.FireflyClientOrDie("node-controller"),
+		controllerContext.FireflyInformerFactory.Cluster().V1alpha1().Clusters(),
+		30*time.Second,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("error creating node controller: %v", err)
 	}
 	go ctrl.Run(ctx, 1)
 	return nil, true, nil

@@ -17,7 +17,20 @@ spec:
     singular: cluster
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Cluster is ready
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: READY
+      type: string
+    - description: Server Version is the Kubernetes version which is reported by the
+        cluster from the API endpoint '/version'
+      jsonPath: .status.clusterInfo.serverVersion
+      name: VERSION
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Cluster is a worker cluster in Firefly. Each cluster will have
@@ -101,6 +114,8 @@ spec:
         type: object
     served: true
     storage: true
+    subresources:
+      status: {}
 status:
   acceptedNames:
     kind: ""
