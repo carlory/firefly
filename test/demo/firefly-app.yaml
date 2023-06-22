@@ -17,4 +17,4 @@ spec:
       # You can remove taints of Node or add this tolerations.
       containers:
       - name: fake-container
-        image: fake-image
+        image: docker.m.daocloud.io/library/nginx

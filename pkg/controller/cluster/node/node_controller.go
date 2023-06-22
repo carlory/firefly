@@ -19,28 +19,27 @@ package node
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	clusterv1alpha1 "github.com/carlory/firefly/pkg/apis/cluster/v1alpha1"
 	fireflyclient "github.com/carlory/firefly/pkg/generated/clientset/versioned"
 	clusterinformers "github.com/carlory/firefly/pkg/generated/informers/externalversions/cluster/v1alpha1"
 	clusterlisters "github.com/carlory/firefly/pkg/generated/listers/cluster/v1alpha1"
 	"github.com/carlory/firefly/pkg/scheme"
-	utilcluster "github.com/carlory/firefly/pkg/util/cluster"
 )
 
 /**
@@ -67,25 +66,42 @@ func NewNodeController(
 	client kubernetes.Interface,
 	fireflyClient fireflyclient.Interface,
 	clusterInformer clusterinformers.ClusterInformer,
+	nodesInformer coreinformers.NodeInformer,
+	workerNodesInformer coreinformers.NodeInformer,
 	resyncPeriod time.Duration) (*NodeController, error) {
 	broadcaster := record.NewBroadcaster()
-	recorder := broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "node-controller"})
+	recorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "node-controller"})
 
 	ctrl := &NodeController{
-		client:           client,
-		fireflyClient:    fireflyClient,
-		clustersLister:   clusterInformer.Lister(),
-		clustersSynced:   clusterInformer.Informer().HasSynced,
-		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "cluster"),
-		workerLoopPeriod: time.Second,
-		eventBroadcaster: broadcaster,
-		eventRecorder:    recorder,
+		client:            client,
+		fireflyClient:     fireflyClient,
+		clustersLister:    clusterInformer.Lister(),
+		clustersSynced:    clusterInformer.Informer().HasSynced,
+		nodesLister:       nodesInformer.Lister(),
+		nodesSynced:       nodesInformer.Informer().HasSynced,
+		workerNodesLister: workerNodesInformer.Lister(),
+		workerNodesSynced: workerNodesInformer.Informer().HasSynced,
+		queue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "node"),
+		workerLoopPeriod:  time.Second,
+		eventBroadcaster:  broadcaster,
+		eventRecorder:     recorder,
 	}
 
-	clusterInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
-		AddFunc:    ctrl.addCluster,
-		UpdateFunc: ctrl.updateCluster,
-		DeleteFunc: ctrl.deleteCluster,
+	// clusterInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
+	// 	AddFunc:    ctrl.addCluster,
+	// 	UpdateFunc: ctrl.updateCluster,
+	// 	DeleteFunc: ctrl.deleteCluster,
+	// }, resyncPeriod)
+
+	nodesInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: ctrl.updateNode,
+		DeleteFunc: ctrl.deleteNode,
+	}, resyncPeriod)
+
+	workerNodesInformer.Informer().AddEventHandlerWithResyncPeriod(cache.ResourceEventHandlerFuncs{
+		AddFunc:    ctrl.addWorkerNode,
+		UpdateFunc: ctrl.updateWorkerNode,
+		DeleteFunc: ctrl.deleteWorkerNode,
 	}, resyncPeriod)
 
 	return ctrl, nil
@@ -99,6 +115,12 @@ type NodeController struct {
 
 	clustersLister clusterlisters.ClusterLister
 	clustersSynced cache.InformerSynced
+
+	nodesLister corelisters.NodeLister
+	nodesSynced cache.InformerSynced
+
+	workerNodesLister corelisters.NodeLister
+	workerNodesSynced cache.InformerSynced
 
 	// Cluster that need to be updated. A channel is inappropriate here,
 	// because it allows services with lots of pods to be serviced much
@@ -123,10 +145,10 @@ func (ctrl *NodeController) Run(ctx context.Context, workers int) {
 
 	defer ctrl.queue.ShutDown()
 
-	klog.Infof("Starting cluster controller")
-	defer klog.Infof("Shutting down cluster controller")
+	klog.Infof("Starting node controller")
+	defer klog.Infof("Shutting down node controller")
 
-	if !cache.WaitForNamedCacheSync("cluster", ctx.Done(), ctrl.clustersSynced) {
+	if !cache.WaitForNamedCacheSync("node", ctx.Done(), ctrl.clustersSynced, ctrl.nodesSynced, ctrl.workerNodesSynced) {
 		return
 	}
 
@@ -158,39 +180,88 @@ func (ctrl *NodeController) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
-func (ctrl *NodeController) addCluster(obj interface{}) {
-	cluster := obj.(*clusterv1alpha1.Cluster)
-	klog.V(4).InfoS("Adding cluster", "cluster", klog.KObj(cluster))
-	ctrl.enqueue(cluster)
+func (ctrl *NodeController) updateNode(old, cur interface{}) {
+	oldNode := old.(*v1.Node)
+	curNode := cur.(*v1.Node)
+	klog.V(4).InfoS("Updating node", "node", klog.KObj(oldNode))
+
+	node := curNode.DeepCopy()
+	key, _ := cache.MetaNamespaceKeyFunc(node)
+	cluster, _, _, _ := cache.SplitClusterMetaNamespaceKey(key)
+	if cluster == "" {
+		return
+	}
+
+	_, err := ctrl.clustersLister.Get(cluster)
+	if err != nil {
+		klog.V(2).InfoS("Cluster has been deleted", "cluster", cluster)
+		return
+	}
+
+	node.Name = strings.TrimSuffix(node.Name, "."+cluster)
+	ctrl.enqueue(node)
 }
 
-func (ctrl *NodeController) updateCluster(old, cur interface{}) {
-	oldCluster := old.(*clusterv1alpha1.Cluster)
-	curCluster := cur.(*clusterv1alpha1.Cluster)
-	klog.V(4).InfoS("Updating cluster", "cluster", klog.KObj(oldCluster))
-	ctrl.enqueue(curCluster)
-}
-
-func (ctrl *NodeController) deleteCluster(obj interface{}) {
-	cluster, ok := obj.(*clusterv1alpha1.Cluster)
+func (ctrl *NodeController) deleteNode(obj interface{}) {
+	node, ok := obj.(*v1.Node)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			utilruntime.HandleError(fmt.Errorf("couldn't get object from tombstone %#v", obj))
 			return
 		}
-		cluster, ok = tombstone.Obj.(*clusterv1alpha1.Cluster)
+		node, ok = tombstone.Obj.(*v1.Node)
 		if !ok {
-			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a Cluster %#v", obj))
+			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a Node %#v", obj))
 			return
 		}
 	}
-	klog.V(4).InfoS("Deleting cluster", "cluster", klog.KObj(cluster))
-	ctrl.enqueue(cluster)
+	klog.V(4).InfoS("Deleting node", "node", klog.KObj(node))
+	clone := node.DeepCopy()
+	key, _ := cache.MetaNamespaceKeyFunc(node)
+	cluster, _, _, _ := cache.SplitClusterMetaNamespaceKey(key)
+	_, err := ctrl.clustersLister.Get(cluster)
+	if err != nil {
+		klog.V(2).InfoS("Cluster has been deleted", "cluster", cluster)
+		return
+	}
+	clone.Name = strings.TrimSuffix(clone.Name, "."+cluster)
+	ctrl.enqueue(clone)
 }
 
-func (ctrl *NodeController) enqueue(cluster *clusterv1alpha1.Cluster) {
-	key, err := cache.MetaNamespaceKeyFunc(cluster)
+func (ctrl *NodeController) addWorkerNode(obj interface{}) {
+	node := obj.(*v1.Node)
+	klog.V(4).InfoS("Adding node", "node", klog.KObj(node))
+	ctrl.enqueue(node)
+}
+
+func (ctrl *NodeController) updateWorkerNode(old, cur interface{}) {
+	oldNode := old.(*v1.Node)
+	curNode := cur.(*v1.Node)
+	klog.V(4).InfoS("Updating node", "node", klog.KObj(oldNode))
+	ctrl.enqueue(curNode)
+}
+
+func (ctrl *NodeController) deleteWorkerNode(obj interface{}) {
+	node, ok := obj.(*v1.Node)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("couldn't get object from tombstone %#v", obj))
+			return
+		}
+		node, ok = tombstone.Obj.(*v1.Node)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a Node %#v", obj))
+			return
+		}
+	}
+	klog.V(4).InfoS("Deleting node", "node", klog.KObj(node))
+	ctrl.enqueue(node)
+}
+
+func (ctrl *NodeController) enqueue(node *v1.Node) {
+	key, err := cache.MetaNamespaceKeyFunc(node)
 	if err != nil {
 		utilruntime.HandleError(err)
 		return
@@ -203,36 +274,36 @@ func (ctrl *NodeController) handleErr(err error, key interface{}) {
 		ctrl.queue.Forget(key)
 		return
 	}
-	_, clusterName, keyErr := cache.SplitMetaNamespaceKey(key.(string))
+	cluster, namespace, name, keyErr := cache.SplitClusterMetaNamespaceKey(key.(string))
 	if keyErr != nil {
 		klog.ErrorS(err, "Failed to split meta cache key", "cacheKey", key)
 	}
 
 	if ctrl.queue.NumRequeues(key) < maxRetries {
-		klog.V(2).InfoS("Error syncing cluster, retrying", "cluster", clusterName, "err", err)
+		klog.V(2).InfoS("Error syncing node, retrying", "cluster", cluster, "node", klog.KRef(namespace, name), "err", err)
 		ctrl.queue.AddRateLimited(key)
 		return
 	}
 
 	utilruntime.HandleError(err)
-	klog.V(2).InfoS("Dropping cluster out of the queue", "cluster", clusterName, "err", err)
+	klog.V(2).InfoS("Dropping node out of the queue", "cluster", cluster, "node", klog.KRef(namespace, name), "err", err)
 	ctrl.queue.Forget(key)
 }
 
 func (ctrl *NodeController) sync(ctx context.Context, key string) error {
-	_, clusterName, err := cache.SplitMetaNamespaceKey(key)
+	clusterName, _, name, err := cache.SplitClusterMetaNamespaceKey(key)
 	if err != nil {
 		klog.ErrorS(err, "Failed to split meta cache key", "cacheKey", key)
 		return err
 	}
 
 	startTime := time.Now()
-	klog.V(4).InfoS("Started syncing cluster", "cluster", clusterName, "startTime", startTime)
+	klog.V(4).InfoS("Started syncing node", "cluster", clusterName, "node", name, "startTime", startTime)
 	defer func() {
-		klog.V(4).InfoS("Finished syncing cluster", "cluster", clusterName, "duration", time.Since(startTime))
+		klog.V(4).InfoS("Finished syncing node", "cluster", clusterName, "node", name, "duration", time.Since(startTime))
 	}()
 
-	cluster, err := ctrl.clustersLister.Get(clusterName)
+	_, err = ctrl.clustersLister.Get(clusterName)
 	if errors.IsNotFound(err) {
 		klog.V(2).InfoS("Cluster has been deleted", "cluster", clusterName)
 		return nil
@@ -241,32 +312,14 @@ func (ctrl *NodeController) sync(ctx context.Context, key string) error {
 		return err
 	}
 
-	klog.InfoS("Syncing cluster", "cluster", klog.KObj(cluster))
+	workerNode, err := ctrl.workerNodesLister.Get(key)
+	if errors.IsNotFound(err) {
+		klog.V(2).InfoS("Node has been deleted", "cluster", clusterName, "node", name)
+		return nil
+	}
 
-	return ctrl.draftImplFunc(ctx, cluster)
-}
-
-func (ctrl *NodeController) draftImplFunc(ctx context.Context, cluster *clusterv1alpha1.Cluster) error {
-	kubeClient, err := utilcluster.NewKubeClientForCluster(ctx, cluster, "cluster-controller")
-	if err != nil {
-		klog.ErrorS(err, "Failed to create client for cluster")
-		return err
-	}
-	clusterNodes, err := kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		klog.ErrorS(err, "Failed to list nodes")
-		return err
-	}
-	var errs []error
-	for _, node := range clusterNodes.Items {
-		klog.InfoS("Node", "node", node.Name)
-		err = ctrl.createOrUpdateFirelyNode(ctx, cluster.Name, &node)
-		if err != nil {
-			klog.ErrorS(err, "Failed to create or update firefly node")
-			errs = append(errs, err)
-		}
-	}
-	return utilerrors.NewAggregate(errs)
+	klog.InfoS("Syncing node", "node", klog.KObj(workerNode))
+	return ctrl.createOrUpdateFirelyNode(ctx, clusterName, workerNode.DeepCopy())
 }
 
 func (ctrl *NodeController) createOrUpdateFirelyNode(ctx context.Context, clusterName string, clusterNode *v1.Node) error {
@@ -303,11 +356,11 @@ func (ctrl *NodeController) createOrUpdateFirelyNode(ctx context.Context, cluste
 	clusterNode.ResourceVersion = node.ResourceVersion
 	clusterNode.UID = node.UID
 	clusterNode.Name = fireflyNodeName(clusterName, clusterNode.Name)
-	got, err := ctrl.client.CoreV1().Nodes().Update(ctx, clusterNode, metav1.UpdateOptions{})
-	if err != nil {
-		return err
-	}
-	clusterNode.ResourceVersion = got.ResourceVersion
+	// got, err := ctrl.client.CoreV1().Nodes().Update(ctx, clusterNode, metav1.UpdateOptions{})
+	// if err != nil {
+	// 	return err
+	// }
+	clusterNode.ResourceVersion = node.ResourceVersion
 	_, err = ctrl.client.CoreV1().Nodes().UpdateStatus(ctx, clusterNode, metav1.UpdateOptions{})
 	return err
 }

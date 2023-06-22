@@ -58,8 +58,9 @@ type ControllerManagerOptions struct {
 	Metrics        *metrics.Options
 	Logs           *logs.Options
 
-	Master     string
-	Kubeconfig string
+	Master                 string
+	Kubeconfig             string
+	ClusterpediaKubeconfig string
 }
 
 // NewControllerManagerOptions creates a new ControllerManagerOptions with a default config.
@@ -117,6 +118,7 @@ func (s *ControllerManagerOptions) Flags(allControllers []string, disabledByDefa
 	fs := fss.FlagSet("misc")
 	fs.StringVar(&s.Master, "master", s.Master, "The address of the Kubernetes API server (overrides any value in kubeconfig).")
 	fs.StringVar(&s.Kubeconfig, "kubeconfig", s.Kubeconfig, "Path to kubeconfig file with authorization and master location information.")
+	fs.StringVar(&s.ClusterpediaKubeconfig, "clusterpedia-kubeconfig", s.ClusterpediaKubeconfig, "Path to kubeconfig file with authorization and master location information for clusterpedia.")
 
 	return fss
 }
@@ -171,6 +173,22 @@ func (s ControllerManagerOptions) Config(allControllers []string, disabledByDefa
 		return nil, err
 	}
 
+	var pediaKubeconfig *restclient.Config
+	if s.ClusterpediaKubeconfig != "" {
+		pediaKubeconfig, err = clientcmd.BuildConfigFromFlags(s.Master, s.ClusterpediaKubeconfig)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		pediaKubeconfig = restclient.CopyConfig(kubeconfig)
+		pediaKubeconfig.Host = kubeconfig.Host + "/apis/clusterpedia.io/v1beta1/resources"
+	}
+
+	pediaClient, err := clientset.NewForConfig(restclient.AddUserAgent(pediaKubeconfig, FireflyControllerManagerUserAgent))
+	if err != nil {
+		return nil, err
+	}
+
 	info, err := client.ServerVersion()
 	if err != nil {
 		return nil, err
@@ -182,7 +200,9 @@ func (s ControllerManagerOptions) Config(allControllers []string, disabledByDefa
 
 	c := &fireflycontrollerconfig.Config{
 		Client:           client,
+		PediaClient:      pediaClient,
 		Kubeconfig:       kubeconfig,
+		PediaKubeconfig:  pediaKubeconfig,
 		EventBroadcaster: eventBroadcaster,
 		EventRecorder:    eventRecorder,
 	}

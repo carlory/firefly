@@ -182,9 +182,10 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 	}
 
 	clientBuilder := clientbuilder.SimpleControllerClientBuilder{ClientConfig: c.Kubeconfig}
+	workerClustersBuilder := clientbuilder.SimpleControllerClientBuilder{ClientConfig: c.PediaKubeconfig}
 
 	run := func(ctx context.Context, initializersFunc ControllerInitializersFunc) {
-		controllerContext, err := CreateControllerContext(c, clientBuilder, ctx.Done())
+		controllerContext, err := CreateControllerContext(c, clientBuilder, workerClustersBuilder, ctx.Done())
 		if err != nil {
 			klog.Fatalf("error building controller context: %v", err)
 		}
@@ -196,6 +197,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 		controllerContext.KubeInformerFactory.Start(stopCh)
 		controllerContext.FireflyInformerFactory.Start(stopCh)
 		controllerContext.ObjectOrMetadataInformerFactory.Start(stopCh)
+		controllerContext.WorkerClustersInformerFactory.Start(stopCh)
 		close(controllerContext.InformersStarted)
 
 		<-ctx.Done()
@@ -287,6 +289,9 @@ type ControllerContext struct {
 	// FireflyInformerFactory gives access to firefly informers for the controller.
 	FireflyInformerFactory fireflyinformers.SharedInformerFactory
 
+	// WorkerClustersInformerFactory gives access to worker clusters informers for the controller.
+	WorkerClustersInformerFactory informers.SharedInformerFactory
+
 	// ObjectOrMetadataInformerFactory gives access to informers for typed resources
 	// and dynamic resources by their metadata. All generic controllers currently use
 	// object metadata - if a future controller needs access to the full object this
@@ -346,6 +351,7 @@ func NewControllerInitializers() map[string]InitFunc {
 	controllers := map[string]InitFunc{}
 	controllers["cluster"] = startClusterController
 	controllers["node"] = startNodeController
+	controllers["pod"] = startPodController
 	return controllers
 }
 
@@ -381,7 +387,7 @@ func GetAvailableResources(clientBuilder clientbuilder.ControllerClientBuilder) 
 // CreateControllerContext creates a context struct containing references to resources needed by the
 // controllers such as the cloud provider and clientBuilder. rootClientBuilder is only used for
 // the shared-informers client and token controller.
-func CreateControllerContext(s *config.CompletedConfig, clientBuilder clientbuilder.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
+func CreateControllerContext(s *config.CompletedConfig, clientBuilder, workerClusterClientBuilder clientbuilder.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
 	versionedClient := clientBuilder.ClientOrDie("firefly-kube-shared-informers")
 	kubeSharedInformers := informers.NewSharedInformerFactory(versionedClient, ResyncPeriod(s)())
 
@@ -396,6 +402,15 @@ func CreateControllerContext(s *config.CompletedConfig, clientBuilder clientbuil
 	// important when we start apiserver and controller manager at the same time.
 	if err := genericcontrollermanager.WaitForAPIServer(versionedClient, 10*time.Second); err != nil {
 		return ControllerContext{}, fmt.Errorf("failed to wait for apiserver being healthy: %v", err)
+	}
+
+	workersClient := workerClusterClientBuilder.ClientOrDie("firefly-worker-clusters-shared-informers")
+	workerClustersSharedInformers := informers.NewSharedInformerFactory(workersClient, 0)
+
+	// If clusterpedia-binding-apiserver is not running we should wait for some time and fail only then. This is particularly
+	// important when we start apiserver and controller manager at the same time.
+	if err := genericcontrollermanager.WaitForAPIServer(workersClient, 10*time.Second); err != nil {
+		return ControllerContext{}, fmt.Errorf("failed to wait for clusterpedia-binding-apiserver being healthy: %v", err)
 	}
 
 	// Use a discovery client capable of being refreshed.
@@ -415,6 +430,7 @@ func CreateControllerContext(s *config.CompletedConfig, clientBuilder clientbuil
 		ClientBuilder:                   clientBuilder,
 		KubeInformerFactory:             kubeSharedInformers,
 		FireflyInformerFactory:          fireflySharedInformers,
+		WorkerClustersInformerFactory:   workerClustersSharedInformers,
 		ObjectOrMetadataInformerFactory: informerfactory.NewInformerFactory(kubeSharedInformers, fireflySharedInformers, metadataInformers),
 		ComponentConfig:                 s.ComponentConfig,
 		RESTMapper:                      restMapper,

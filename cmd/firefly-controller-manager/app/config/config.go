@@ -42,6 +42,12 @@ type Config struct {
 	// the rest config for the master
 	Kubeconfig *restclient.Config
 
+	// the general kube client for clusterpedia
+	PediaClient *clientset.Clientset
+
+	// the rest config for the clusterpedia master
+	PediaKubeconfig *restclient.Config
+
 	EventBroadcaster record.EventBroadcaster
 	EventRecorder    record.EventRecorder
 }

@@ -25,6 +25,7 @@ import (
 
 	"github.com/carlory/firefly/pkg/controller/cluster"
 	"github.com/carlory/firefly/pkg/controller/cluster/node"
+	"github.com/carlory/firefly/pkg/controller/pod"
 )
 
 func startClusterController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
@@ -46,10 +47,27 @@ func startNodeController(ctx context.Context, controllerContext ControllerContex
 		controllerContext.ClientBuilder.ClientOrDie("node-controller"),
 		controllerContext.ClientBuilder.FireflyClientOrDie("node-controller"),
 		controllerContext.FireflyInformerFactory.Cluster().V1alpha1().Clusters(),
+		controllerContext.KubeInformerFactory.Core().V1().Nodes(),
+		controllerContext.WorkerClustersInformerFactory.Core().V1().Nodes(),
 		5*time.Second,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("error creating node controller: %v", err)
+	}
+	go ctrl.Run(ctx, 1)
+	return nil, true, nil
+}
+
+func startPodController(ctx context.Context, controllerContext ControllerContext) (controller.Interface, bool, error) {
+	ctrl, err := pod.NewPodController(
+		controllerContext.ClientBuilder.ClientOrDie("pod-controller"),
+		controllerContext.KubeInformerFactory.Core().V1().Pods(),
+		controllerContext.FireflyInformerFactory.Cluster().V1alpha1().Clusters(),
+		controllerContext.WorkerClustersInformerFactory.Core().V1().Pods(),
+		5*time.Second,
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("error creating pod controller: %v", err)
 	}
 	go ctrl.Run(ctx, 1)
 	return nil, true, nil

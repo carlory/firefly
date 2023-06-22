@@ -109,10 +109,22 @@ func MetaNamespaceKeyFunc(obj interface{}) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("object has no meta: %v", err)
 	}
+
+	key := meta.GetName()
 	if len(meta.GetNamespace()) > 0 {
-		return meta.GetNamespace() + "/" + meta.GetName(), nil
+		key = meta.GetNamespace() + "/" + meta.GetName()
 	}
-	return meta.GetName(), nil
+
+	anns := meta.GetAnnotations()
+	if anns == nil {
+		return key, nil
+	}
+
+	clusterName, ok := meta.GetAnnotations()["shadow.clusterpedia.io/cluster-name"]
+	if ok {
+		key = clusterName + "~" + key
+	}
+	return key, nil
 }
 
 // SplitMetaNamespaceKey returns the namespace and name that
@@ -121,7 +133,12 @@ func MetaNamespaceKeyFunc(obj interface{}) (string, error) {
 // TODO: replace key-as-string with a key-as-struct so that this
 // packing/unpacking won't be necessary.
 func SplitMetaNamespaceKey(key string) (namespace, name string, err error) {
-	parts := strings.Split(key, "/")
+	parts := strings.Split(key, "~")
+	if len(parts) == 2 {
+		key = parts[1]
+	}
+
+	parts = strings.Split(key, "/")
 	switch len(parts) {
 	case 1:
 		// name only, no namespace
@@ -132,6 +149,32 @@ func SplitMetaNamespaceKey(key string) (namespace, name string, err error) {
 	}
 
 	return "", "", fmt.Errorf("unexpected key format: %q", key)
+}
+
+// SplitClusterMetaNamespaceKey returns the cluster, namespace and name that
+// MetaNamespaceKeyFunc encoded into key.
+//
+// TODO: replace key-as-string with a key-as-struct so that this
+// packing/unpacking won't be necessary.
+func SplitClusterMetaNamespaceKey(key string) (cluster, namespace, name string, err error) {
+	clusterName := ""
+	parts := strings.Split(key, "~")
+	if len(parts) == 2 {
+		clusterName = parts[0]
+		key = parts[1]
+	}
+
+	parts = strings.Split(key, "/")
+	switch len(parts) {
+	case 1:
+		// name only, no namespace
+		return clusterName, "", parts[0], nil
+	case 2:
+		// namespace and name
+		return clusterName, parts[0], parts[1], nil
+	}
+
+	return clusterName, "", "", fmt.Errorf("unexpected key format: %q", key)
 }
 
 // `*cache` implements Indexer in terms of a ThreadSafeStore and an

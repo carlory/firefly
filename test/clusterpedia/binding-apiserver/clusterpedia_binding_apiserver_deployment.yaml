@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clusterpedia-binding-apiserver
+  namespace: firefly-system
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 6443
+  selector:
+    app: clusterpedia-binding-apiserver
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clusterpedia-binding-apiserver
+  namespace: firefly-system
+  labels:
+    app: clusterpedia-binding-apiserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clusterpedia-binding-apiserver
+  template:
+    metadata:
+      labels:
+        app: clusterpedia-binding-apiserver
+    spec:
+      volumes:
+      - name: kubeconfig
+        configMap:
+          name: admin.conf
+      containers:
+        - name: binding-apiserver
+          image: m.daocloud.io/ghcr.io/clusterpedia-io/clusterpedia/binding-apiserver:latest
+          command:
+            - /usr/local/bin/binding-apiserver
+            - --secure-port=6443
+            - --storage-name=memory
+            - --kubeconfig=/etc/kubernetes/admin.conf
+            - --authentication-kubeconfig=/etc/kubernetes/admin.conf
+            - --authorization-kubeconfig=/etc/kubernetes/admin.conf
+            - -v=3
+          volumeMounts:
+          - name: kubeconfig
+            mountPath: /etc/kubernetes
