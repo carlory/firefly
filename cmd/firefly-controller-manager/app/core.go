@@ -46,7 +46,7 @@ func startNodeController(ctx context.Context, controllerContext ControllerContex
 		controllerContext.ClientBuilder.ClientOrDie("node-controller"),
 		controllerContext.ClientBuilder.FireflyClientOrDie("node-controller"),
 		controllerContext.FireflyInformerFactory.Cluster().V1alpha1().Clusters(),
-		30*time.Second,
+		5*time.Second,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("error creating node controller: %v", err)

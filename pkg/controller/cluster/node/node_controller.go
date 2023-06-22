@@ -22,8 +22,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -32,14 +34,21 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	clusterv1alpha1 "github.com/carlory/firefly/pkg/apis/cluster/v1alpha1"
 	fireflyclient "github.com/carlory/firefly/pkg/generated/clientset/versioned"
 	clusterinformers "github.com/carlory/firefly/pkg/generated/informers/externalversions/cluster/v1alpha1"
 	clusterlisters "github.com/carlory/firefly/pkg/generated/listers/cluster/v1alpha1"
 	"github.com/carlory/firefly/pkg/scheme"
+	utilcluster "github.com/carlory/firefly/pkg/util/cluster"
 )
+
+/**
+
+In feature, we will re-implement the node controller to manage the node resources in the cluster
+based on mulit-cluster informers .
+
+**/
 
 const (
 	// maxRetries is the number of times a cluster will be retried before it is dropped out of the queue.
@@ -232,49 +241,73 @@ func (ctrl *NodeController) sync(ctx context.Context, key string) error {
 		return err
 	}
 
-	// Deep-copy otherwise we are mutating our cache.
-	// TODO: Deep-copy only when needed.
-	cluster = cluster.DeepCopy()
-
-	// examine DeletionTimestamp to determine if object is under deletion
-	if cluster.DeletionTimestamp.IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object. This is equivalent
-		// registering our finalizer.
-		if !controllerutil.ContainsFinalizer(cluster, NodeControllerFinalizerName) {
-			controllerutil.AddFinalizer(cluster, NodeControllerFinalizerName)
-			cluster, err = ctrl.fireflyClient.ClusterV1alpha1().Clusters().Update(ctx, cluster, metav1.UpdateOptions{})
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		// The object is being deleted
-		if controllerutil.ContainsFinalizer(cluster, NodeControllerFinalizerName) {
-			// our finalizer is present, so lets handle any external dependency
-			if err := ctrl.deleteUnableGCResources(cluster); err != nil {
-				// if fail to delete the external dependency here, return with error
-				// so that it can be retried
-				return err
-			}
-
-			// remove our finalizer from the list and update it.
-			controllerutil.RemoveFinalizer(cluster, NodeControllerFinalizerName)
-			_, err := ctrl.fireflyClient.ClusterV1alpha1().Clusters().Update(ctx, cluster, metav1.UpdateOptions{})
-			if err != nil {
-				return err
-			}
-			// Stop reconciliation as the item is being deleted
-			return nil
-		}
-	}
-
 	klog.InfoS("Syncing cluster", "cluster", klog.KObj(cluster))
 
-	return nil
+	return ctrl.draftImplFunc(ctx, cluster)
 }
 
-// deleteUnableGCResources deletes the resources that are unable to garbage collect.
-func (ctrl *NodeController) deleteUnableGCResources(cluster *clusterv1alpha1.Cluster) error {
-	return nil
+func (ctrl *NodeController) draftImplFunc(ctx context.Context, cluster *clusterv1alpha1.Cluster) error {
+	kubeClient, err := utilcluster.NewKubeClientForCluster(ctx, cluster, "cluster-controller")
+	if err != nil {
+		klog.ErrorS(err, "Failed to create client for cluster")
+		return err
+	}
+	clusterNodes, err := kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		klog.ErrorS(err, "Failed to list nodes")
+		return err
+	}
+	var errs []error
+	for _, node := range clusterNodes.Items {
+		klog.InfoS("Node", "node", node.Name)
+		err = ctrl.createOrUpdateFirelyNode(ctx, cluster.Name, &node)
+		if err != nil {
+			klog.ErrorS(err, "Failed to create or update firefly node")
+			errs = append(errs, err)
+		}
+	}
+	return utilerrors.NewAggregate(errs)
+}
+
+func (ctrl *NodeController) createOrUpdateFirelyNode(ctx context.Context, clusterName string, clusterNode *v1.Node) error {
+
+	var fireflyNodeName = func(clusterName, nodeName string) string {
+		return fmt.Sprintf("%s.%s", nodeName, clusterName)
+	}
+
+	node, err := ctrl.client.CoreV1().Nodes().Get(ctx, fireflyNodeName(clusterName, clusterNode.Name), metav1.GetOptions{})
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+		// Create node
+		clusterNode.Finalizers = []string{}
+		clusterNode.OwnerReferences = nil
+		clusterNode.ResourceVersion = ""
+		clusterNode.UID = ""
+		clusterNode.CreationTimestamp = metav1.Time{}
+		clusterNode.DeletionTimestamp = nil
+		clusterNode.Generation = 0
+		clusterNode.GenerateName = ""
+		clusterNode.Name = fireflyNodeName(clusterName, clusterNode.Name)
+		got, err := ctrl.client.CoreV1().Nodes().Create(ctx, clusterNode, metav1.CreateOptions{})
+		if err != nil {
+			return err
+		}
+		clusterNode.ResourceVersion = got.ResourceVersion
+		_, err = ctrl.client.CoreV1().Nodes().UpdateStatus(ctx, clusterNode, metav1.UpdateOptions{})
+		return err
+	}
+
+	// Update node
+	clusterNode.ResourceVersion = node.ResourceVersion
+	clusterNode.UID = node.UID
+	clusterNode.Name = fireflyNodeName(clusterName, clusterNode.Name)
+	got, err := ctrl.client.CoreV1().Nodes().Update(ctx, clusterNode, metav1.UpdateOptions{})
+	if err != nil {
+		return err
+	}
+	clusterNode.ResourceVersion = got.ResourceVersion
+	_, err = ctrl.client.CoreV1().Nodes().UpdateStatus(ctx, clusterNode, metav1.UpdateOptions{})
+	return err
 }
